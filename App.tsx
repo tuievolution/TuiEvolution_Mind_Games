@@ -1,16 +1,24 @@
-import React from 'react';
-// 1. Import DefaultTheme from react-navigation
-import { NavigationContainer, DefaultTheme } from '@react-navigation/native'; 
+import React, { useEffect } from 'react';
+import { Platform, View } from 'react-native'; // Import Platform and View
+import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AppNavigator from './navigation/AppNavigator';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 
 const ThemedNavigation = () => {
-  const { colors, mode } = useTheme(); // Grab 'mode' too, so we can pass it to 'dark'
+  const { colors, mode } = useTheme();
 
-  // 2. Merge React Navigation's default theme with our custom colors
+  // 1. THE WEB MAGIC TRICK: 
+  // This physically reaches out to the browser and changes the HTML background 
+  // every time you click a new theme color!
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      document.body.style.backgroundColor = colors.background;
+    }
+  }, [colors.background]);
+
   const customNavigationTheme = {
-    ...DefaultTheme, // <--- This magically provides the missing 'fonts' object!
+    ...DefaultTheme,
     dark: mode === 'dark',
     colors: {
       ...DefaultTheme.colors,
@@ -24,10 +32,14 @@ const ThemedNavigation = () => {
   };
 
   return (
-    // 3. Pass the merged theme
-    <NavigationContainer theme={customNavigationTheme}>
-      <AppNavigator />
-    </NavigationContainer>
+    // 2. THE NATIVE MAGIC TRICK:
+    // We wrap the entire navigation container in a View with flex: 1
+    // This ensures the deepest layer of the app uses your theme color.
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <NavigationContainer theme={customNavigationTheme}>
+        <AppNavigator />
+      </NavigationContainer>
+    </View>
   );
 };
 
