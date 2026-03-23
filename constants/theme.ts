@@ -9,15 +9,19 @@ export const themes = {
       selected: '#d0aaff',
       userInput: '#673ab7',
       input: '#9370DB',
+      highlight: '#e0c3fc', // NEW: For matching numbers
+      restricted: 'rgba(103, 58, 183, 0.12)', // NEW: For row/col/box path
     },
     dark: {
-      background: '#241738', // This is the deep purple for the screen!
+      background: '#241738',
       text: '#d3bdf0',
       fixedText: '#aaa',
-      fixedBackground: '#1b112c', // Darker purple for the NavBar
+      fixedBackground: '#1b112c',
       selected: '#a47ffb',
       userInput: '#bb86fc',
       input: '#a77ff0',
+      highlight: '#5e35b1',
+      restricted: 'rgba(209, 170, 255, 0.12)',
     },
   },
   blue: {
@@ -29,15 +33,19 @@ export const themes = {
       selected: '#9ecfff',
       userInput: '#1976d2',
       input: '#6aa3ff',
+      highlight: '#bbdefb',
+      restricted: 'rgba(25, 118, 210, 0.12)',
     },
     dark: {
-      background: '#0d1b2a', // Deep navy blue
+      background: '#0d1b2a',
       text: '#a0c4ff',
       fixedText: '#aaa',
       fixedBackground: '#060d14',
       selected: '#6493ce',
       userInput: '#90caf9',
       input: '#4a90e2',
+      highlight: '#1565c0',
+      restricted: 'rgba(144, 202, 249, 0.12)',
     },
   },
 };

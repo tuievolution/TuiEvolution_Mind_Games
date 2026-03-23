@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform } from 'react-native';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList, Cell } from '../../utils/types';
@@ -17,7 +17,7 @@ export default function GameScreen() {
   const isResumed = route.params?.resume || false;
   
   const { colors } = useTheme();
-  const styles = getStyles(colors); // Apply dynamic styles
+  const styles = getStyles(colors);
 
   const [grid, setGrid] = useState<Cell[][]>([]);
   const [solution, setSolution] = useState<number[][]>([]);
@@ -26,10 +26,32 @@ export default function GameScreen() {
   const [time, setTime] = useState(0);
   const [numberUsage, setNumberUsage] = useState<{ [key: number]: number }>({});
 
+  // Timer
   useEffect(() => {
     const timer = setInterval(() => setTime((t) => t + 1), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  // Keyboard Support (Web Only)
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!selectedCell) return;
+      const key = e.key;
+      const code = e.code;
+
+      if (['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(key)) {
+        handleNumberInput(parseInt(key, 10));
+      } else if (code.startsWith('Numpad') && code.length === 7) {
+        const num = parseInt(code.charAt(6), 10);
+        if (num >= 1 && num <= 9) handleNumberInput(num);
+      } else if (key === 'Backspace' || key === 'Delete') {
+        handleNumberInput(0);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedCell, grid]);
 
   useEffect(() => {
     const setupGame = async () => {
@@ -40,23 +62,25 @@ export default function GameScreen() {
           setSolution(saved.solution);
           setTime(saved.time);
           setMistakes(saved.mistakes);
-          updateNumberUsage(saved.grid);
+          updateNumberUsage(saved.grid, saved.solution);
           return;
         }
       }
-      const { puzzle, solution } = generateSudoku(difficulty);
+      const { puzzle, solution: sol } = generateSudoku(difficulty);
       setGrid(puzzle);
-      setSolution(solution);
-      updateNumberUsage(puzzle);
+      setSolution(sol);
+      updateNumberUsage(puzzle, sol);
     };
     setupGame();
   }, [isResumed, difficulty]);
 
-  const updateNumberUsage = (grid: Cell[][]) => {
+  const updateNumberUsage = (currentGrid: Cell[][], currentSolution: number[][]) => {
     const usage: { [key: number]: number } = {};
-    for (let row of grid) {
-      for (let cell of row) {
-        if (cell.value) {
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const cell = currentGrid[r][c];
+        // Only count as "used" if the number is correct
+        if (cell.value !== 0 && cell.value === currentSolution[r][c]) {
           usage[cell.value] = (usage[cell.value] || 0) + 1;
         }
       }
@@ -71,6 +95,16 @@ export default function GameScreen() {
     if (currentCell.readOnly) return;
 
     const updatedGrid = cloneGrid(grid);
+
+    // Toggle/Clear Logic: If same number is pressed or 0, clear the cell
+    if (num === 0 || currentCell.value === num) {
+      updatedGrid[row][col].value = 0;
+      setGrid(updatedGrid);
+      updateNumberUsage(updatedGrid, solution);
+      saveGame({ grid: updatedGrid, solution, mistakes, time });
+      return;
+    }
+
     updatedGrid[row][col] = { value: num, readOnly: false, notes: [] };
 
     if (num !== solution[row][col]) {
@@ -85,7 +119,7 @@ export default function GameScreen() {
     }
 
     setGrid(updatedGrid);
-    updateNumberUsage(updatedGrid);
+    updateNumberUsage(updatedGrid, solution);
     saveGame({ grid: updatedGrid, solution, mistakes, time });
 
     if (isComplete(updatedGrid, solution)) {
@@ -99,11 +133,9 @@ export default function GameScreen() {
     const hint = getHint(grid, solution);
     if (hint) {
       const updatedGrid = cloneGrid(grid);
-      updatedGrid[hint.row][hint.col].value = hint.value;
-      updatedGrid[hint.row][hint.col].readOnly = false;
-      updatedGrid[hint.row][hint.col].notes = [];
+      updatedGrid[hint.row][hint.col] = { value: hint.value, readOnly: false, notes: [] };
       setGrid(updatedGrid);
-      updateNumberUsage(updatedGrid);
+      updateNumberUsage(updatedGrid, solution);
       saveGame({ grid: updatedGrid, solution, mistakes, time });
     } else {
       alert("Tüm hücreler dolu!");
@@ -114,16 +146,37 @@ export default function GameScreen() {
     const isSelected = selectedCell?.row === rowIndex && selectedCell?.col === colIndex;
     const isIncorrect = cell.value !== 0 && cell.value !== solution[rowIndex][colIndex];
     
-    // Calculate thick borders for 3x3 grid boxes
+    let isRelated = false;
+    let isSameNumber = false;
+
+    if (selectedCell) {
+      // Crosshair logic (Same Row, Col, or 3x3 Box)
+      const sameRow = rowIndex === selectedCell.row;
+      const sameCol = colIndex === selectedCell.col;
+      const sameBlock = Math.floor(rowIndex / 3) === Math.floor(selectedCell.row / 3) && 
+                        Math.floor(colIndex / 3) === Math.floor(selectedCell.col / 3);
+      
+      if (sameRow || sameCol || sameBlock) isRelated = true;
+
+      // Matching Number logic
+      const selectedValue = grid[selectedCell.row][selectedCell.col].value;
+      if (selectedValue !== 0 && cell.value === selectedValue) isSameNumber = true;
+    }
+
     const borderStyle = {
       borderTopWidth: rowIndex % 3 === 0 ? 2 : 0.5,
       borderLeftWidth: colIndex % 3 === 0 ? 2 : 0.5,
+      borderRightWidth: colIndex === 8 ? 2 : 0.5,
+      borderBottomWidth: rowIndex === 8 ? 2 : 0.5,
     };
 
+    // Color Priority: Selected > Incorrect > SameNumber > Crosshair > Fixed/Base
     let cellBg = 'transparent';
-    if (isSelected) cellBg = colors.selected || colors.input;
+    if (isSelected) cellBg = colors.selected;
     else if (isIncorrect && !cell.readOnly) cellBg = '#ffcccc';
-    else if (cell.readOnly) cellBg = colors.fixedBackground || 'rgba(150,150,150,0.2)';
+    else if (isSameNumber) cellBg = colors.highlight; 
+    else if (isRelated) cellBg = colors.restricted; 
+    else if (cell.readOnly) cellBg = colors.fixedBackground;
 
     return (
       <TouchableOpacity
@@ -132,7 +185,10 @@ export default function GameScreen() {
         onPress={() => setSelectedCell({ row: rowIndex, col: colIndex })}
       >
         {cell.value !== 0 && (
-          <Text style={[styles.cellText, { color: cell.readOnly ? colors.text : colors.userInput || colors.input, fontWeight: cell.readOnly ? 'bold' : 'normal' }]}>
+          <Text style={[styles.cellText, { 
+            color: cell.readOnly ? colors.text : (colors.userInput || colors.input),
+            fontWeight: cell.readOnly ? 'bold' : 'normal'
+          }]}>
             {cell.value}
           </Text>
         )}
@@ -161,14 +217,14 @@ export default function GameScreen() {
       </View>
 
       <View style={styles.controls}>
-        <TouchableOpacity onPress={handleHint}>
+        <TouchableOpacity onPress={handleHint} style={styles.controlBtn}>
           <Text style={styles.noteToggle}>🧠 Hint</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.controlBtn}>
           <Text style={styles.noteToggle}>🔄 Reset</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => navigation.navigate('Home')}>
-          <Text style={styles.noteToggle}>🏠 Ana Sayfa</Text>
+        <TouchableOpacity onPress={() => navigation.navigate('Home')} style={styles.controlBtn}>
+          <Text style={styles.noteToggle}>🏠 Home</Text>
         </TouchableOpacity>
       </View>
 
@@ -179,11 +235,11 @@ export default function GameScreen() {
           return (
             <TouchableOpacity
               key={num}
-              style={[styles.numButton, { backgroundColor: disabled ? 'rgba(150,150,150,0.3)' : colors.input }]}
+              style={[styles.numButton, { backgroundColor: disabled ? 'rgba(150,150,150,0.2)' : colors.input }]}
               onPress={() => !disabled && handleNumberInput(num)}
               disabled={disabled}
             >
-              <Text style={styles.numButtonText}>{num}</Text>
+              <Text style={[styles.numButtonText, { opacity: disabled ? 0.3 : 1 }]}>{num}</Text>
             </TouchableOpacity>
           );
         })}
@@ -195,18 +251,15 @@ export default function GameScreen() {
 const getStyles = (colors: any) => StyleSheet.create({
   container: { padding: 16, alignItems: 'center', justifyContent: 'flex-start', flexGrow: 1, backgroundColor: colors.background },
   infoBar: { flexDirection: 'row', justifyContent: 'space-between', width: '100%', maxWidth: 400, marginBottom: 12 },
-  infoText: { color: colors.text, fontSize: 16 },
+  infoText: { color: colors.text, fontSize: 16, fontWeight: '600' },
   grid: { width: '100%', maxWidth: 400, aspectRatio: 1, borderWidth: 2, borderColor: colors.text },
   row: { flexDirection: 'row', flex: 1 },
-  cell: { 
-    flex: 1, justifyContent: 'center', alignItems: 'center', 
-    minWidth: 30, minHeight: 30, 
-    borderRightWidth: 0.5, borderBottomWidth: 0.5, borderColor: colors.text 
-  },
-  cellText: { fontSize: 18 },
+  cell: { flex: 1, justifyContent: 'center', alignItems: 'center', minWidth: 30, minHeight: 30, borderColor: colors.text },
+  cellText: { fontSize: 20 },
   controls: { flexDirection: 'row', justifyContent: 'space-around', width: '100%', maxWidth: 400, marginVertical: 20 },
+  controlBtn: { padding: 8 },
   noteToggle: { fontSize: 16, fontWeight: 'bold', color: colors.text },
   inputRow: { flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', maxWidth: 400 },
-  numButton: { padding: 12, margin: 4, borderRadius: 6, width: 45, alignItems: 'center' },
-  numButtonText: { fontSize: 20, fontWeight: 'bold', color: colors.text },
+  numButton: { padding: 12, margin: 4, borderRadius: 8, width: 46, alignItems: 'center', elevation: 2 },
+  numButtonText: { fontSize: 22, fontWeight: 'bold', color: colors.text },
 });
