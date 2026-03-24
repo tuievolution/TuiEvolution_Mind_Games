@@ -4,9 +4,13 @@ import { useNavigation } from '@react-navigation/native';
 // 🚨 NEW: Import useSafeAreaInsets to perfectly calculate the phone's notch/status bar height
 import { useSafeAreaInsets } from 'react-native-safe-area-context'; 
 import { useTheme } from '../context/ThemeContext';
+
 const THEME_OPTIONS = [
   { key: 'purple', hex: '#9370DB', label: 'Purple' },
   { key: 'blue', hex: '#6aa3ff', label: 'Blue' },
+  { key: 'pink', hex: '#ec4899', label: 'Pink' },
+  { key: 'cyan', hex: '#06b6d4', label: 'Cyan' },
+  { key: 'gray', hex: '#6b7280', label: 'Gray' },
 ];
 
 export const NavBar = () => {
