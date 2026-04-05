@@ -1,16 +1,16 @@
 import React, { useEffect } from 'react';
-import { Platform, View } from 'react-native'; // Import Platform and View
+import { Platform, View } from 'react-native';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+// 🚨 NEW: Import the StatusBar controller
+import { StatusBar } from 'expo-status-bar'; 
 import AppNavigator from './navigation/AppNavigator';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 
 const ThemedNavigation = () => {
   const { colors, mode } = useTheme();
 
-  // 1. THE WEB MAGIC TRICK: 
-  // This physically reaches out to the browser and changes the HTML background 
-  // every time you click a new theme color!
+  // Web background sync
   useEffect(() => {
     if (Platform.OS === 'web') {
       document.body.style.backgroundColor = colors.background;
@@ -32,10 +32,17 @@ const ThemedNavigation = () => {
   };
 
   return (
-    // 2. THE NATIVE MAGIC TRICK:
-    // We wrap the entire navigation container in a View with flex: 1
-    // This ensures the deepest layer of the app uses your theme color.
     <View style={{ flex: 1, backgroundColor: colors.background }}>
+      {/* ✨ NEW: The Status Bar Controller ✨ */}
+      <StatusBar 
+        // Automatically switches text color based on your app's mode!
+        style={mode === 'dark' ? 'light' : 'dark'} 
+        // Matches the NavBar background perfectly
+        backgroundColor={colors.fixedBackground} 
+        // Ensures the app draws *under* it, so our insets.top in the NavBar works perfectly
+        translucent={true} 
+      />
+      
       <NavigationContainer theme={customNavigationTheme}>
         <AppNavigator />
       </NavigationContainer>
