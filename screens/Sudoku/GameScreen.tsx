@@ -7,7 +7,8 @@ import { generateSudoku } from '../../services/sudokuGenerator';
 import { cloneGrid, isComplete } from '../../utils/helpers';
 import { saveStreak, resetStreak } from '../../services/streakManager';
 import { loadGame, saveGame, clearSavedGame } from '../../storage/storageUtils';
-import { getHint } from '../../services/hintManager';
+// 🚨 IMPORT UPDATED HINT FUNCTIONS
+import { useHint, getSudokuHint, getStats } from '../../services/hintManager';
 import { useTheme } from '../../context/ThemeContext';
 
 export default function GameScreen() {
@@ -26,10 +27,27 @@ export default function GameScreen() {
   const [time, setTime] = useState(0);
   const [numberUsage, setNumberUsage] = useState<{ [key: number]: number }>({});
 
-  // ✨ TIMER: Simple 1-second interval counter
+  // ✨ NEW: Hint states for tokens, cooldowns, and the 2-step focus logic
+  const [hintCooldown, setHintCooldown] = useState(0);
+  const [hintTokens, setHintTokens] = useState(0);
+  const [suggestedHint, setSuggestedHint] = useState<{ row: number, col: number, value: number } | null>(null);
+
+  // ✨ TIMER & COOLDOWN: Simple 1-second interval counter
   useEffect(() => {
-    const timer = setInterval(() => setTime((t) => t + 1), 1000);
+    const timer = setInterval(() => {
+      setTime((t) => t + 1);
+      setHintCooldown((c) => (c > 0 ? c - 1 : 0)); // Countdown hint lock
+    }, 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  // ✨ FETCH TOKENS ON LOAD
+  useEffect(() => {
+    const fetchStats = async () => {
+      const stats = await getStats();
+      setHintTokens(stats.hints);
+    };
+    fetchStats();
   }, []);
 
   // ✨ SETUP GAME: Loads a saved game or generates a new one based on difficulty
@@ -56,34 +74,21 @@ export default function GameScreen() {
 
   // ✨ KEYBOARD LISTENER: Allows PC users to use standard numbers and Numpad
   useEffect(() => {
-    // Only attach this listener if running on a web browser
     if (Platform.OS !== 'web') return;
-
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (!selectedCell) return; // Do nothing if the user hasn't clicked a cell yet
-      
+      if (!selectedCell) return; 
       const key = e.key;
-      const code = e.code; // code captures the physical key (like 'Numpad5')
-
-      // 1. Standard Number Row (1-9)
+      const code = e.code; 
       if (['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(key)) {
         handleNumberInput(parseInt(key, 10));
-      } 
-      // 2. Physical Numpad check
-      else if (code && code.startsWith('Numpad')) {
+      } else if (code && code.startsWith('Numpad')) {
         const num = parseInt(code.replace('Numpad', ''), 10);
-        if (num >= 1 && num <= 9) {
-          handleNumberInput(num);
-        }
-      } 
-      // 3. Backspace or Delete acts as a "clear cell" command (passing 0)
-      else if (key === 'Backspace' || key === 'Delete') {
+        if (num >= 1 && num <= 9) handleNumberInput(num);
+      } else if (key === 'Backspace' || key === 'Delete') {
         handleNumberInput(0);
       }
     };
-
     window.addEventListener('keydown', handleKeyDown);
-    // Cleanup function to prevent memory leaks when the component unmounts
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedCell, grid]); 
 
@@ -94,7 +99,6 @@ export default function GameScreen() {
     for (let r = 0; r < 9; r++) {
       for (let c = 0; c < 9; c++) {
         const cell = currentGrid[r][c];
-        // If the cell has a number AND it matches the background solution, count it
         if (cell.value !== 0 && cell.value === currentSolution[r][c]) {
           usage[cell.value] = (usage[cell.value] || 0) + 1;
         }
@@ -108,10 +112,7 @@ export default function GameScreen() {
     if (!selectedCell) return;
     const { row, col } = selectedCell;
     const currentCell = grid[row][col];
-
-    // Don't allow changing the fixed numbers the game starts with
     if (currentCell.readOnly) return;
-
     const updatedGrid = cloneGrid(grid);
 
     // ✨ TOGGLE TO CLEAR: If user presses backspace (0) OR clicks the exact same number, erase it
@@ -120,30 +121,33 @@ export default function GameScreen() {
       setGrid(updatedGrid);
       updateNumberUsage(updatedGrid, solution);
       saveGame({ grid: updatedGrid, solution, mistakes, time });
-      return; // Stop executing so we don't count a mistake for clearing a cell
+      return; 
     }
 
-    // ✨ OVERWRITE: Apply the new number directly (replaces whatever was there before)
     updatedGrid[row][col] = { value: num, readOnly: false, notes: [] };
 
-    // ✨ MISTAKE CHECK: Compare the input to the hidden solution
+    // ✨ MISTAKE CHECK
     if (num !== solution[row][col]) {
       setMistakes((m) => {
         const newMistakes = m + 1;
-        // Game Over condition
         if (newMistakes >= 3) {
           resetStreak();
           navigation.goBack();
         }
         return newMistakes;
       });
+    } else {
+      // If they typed the correct number into the suggested hint cell manually, clear the hint!
+      if (suggestedHint && suggestedHint.row === row && suggestedHint.col === col) {
+        setSuggestedHint(null);
+        setHintCooldown(60); // Start cooldown since the hint is resolved
+      }
     }
 
     setGrid(updatedGrid);
     updateNumberUsage(updatedGrid, solution);
     saveGame({ grid: updatedGrid, solution, mistakes, time });
 
-    // ✨ WIN CONDITION: Check if the grid perfectly matches the solution
     if (isComplete(updatedGrid, solution)) {
       clearSavedGame();
       saveStreak();
@@ -151,17 +155,44 @@ export default function GameScreen() {
     }
   };
 
-  // ✨ HINT SYSTEM: Finds an empty cell and magically fills the correct answer
-  const handleHint = () => {
-    const hint = getHint(grid, solution);
-    if (hint) {
+  // ✨ NEW: 2-STEP HINT SYSTEM
+  const handleHint = async () => {
+    if (hintCooldown > 0) return;
+
+    // STEP 2: If a hint is already highlighted, fill it in!
+    if (suggestedHint) {
       const updatedGrid = cloneGrid(grid);
-      updatedGrid[hint.row][hint.col].value = hint.value;
-      updatedGrid[hint.row][hint.col].readOnly = false;
-      updatedGrid[hint.row][hint.col].notes = [];
+      updatedGrid[suggestedHint.row][suggestedHint.col].value = suggestedHint.value;
+      updatedGrid[suggestedHint.row][suggestedHint.col].readOnly = false;
+      
       setGrid(updatedGrid);
       updateNumberUsage(updatedGrid, solution);
       saveGame({ grid: updatedGrid, solution, mistakes, time });
+      
+      setSuggestedHint(null); // Clear the active hint
+      setHintCooldown(60);    // Start the 60-second cooldown
+      
+      if (isComplete(updatedGrid, solution)) {
+        clearSavedGame();
+        saveStreak();
+        navigation.navigate('SudokuResult', { time, mistakes, difficulty });
+      }
+      return;
+    }
+
+    // STEP 1: Check tokens and highlight a cell to focus on
+    const hasToken = await useHint();
+    if (!hasToken) {
+      alert("İpucu kalmadı! Yıldız kazanarak yeni ipuçları alabilirsiniz.");
+      return;
+    }
+
+    const hint = getSudokuHint(grid, solution);
+    if (hint) {
+      setHintTokens(prev => prev - 1); // Deduct token
+      setSuggestedHint(hint);          // Save it in state
+      setSelectedCell({ row: hint.row, col: hint.col }); // Move cursor to it automatically
+      // Notice we DO NOT start the cooldown yet! They must click again to reveal.
     } else {
       alert("Tüm hücreler dolu!");
     }
@@ -171,28 +202,25 @@ export default function GameScreen() {
   const renderCell = (cell: Cell, rowIndex: number, colIndex: number) => {
     const isSelected = selectedCell?.row === rowIndex && selectedCell?.col === colIndex;
     const isIncorrect = cell.value !== 0 && cell.value !== solution[rowIndex][colIndex];
+    // Check if this specific cell is the active hint focus target
+    const isSuggestedHint = suggestedHint?.row === rowIndex && suggestedHint?.col === colIndex;
     
     let isRelated = false;
     let isSameNumber = false;
 
     if (selectedCell) {
-      // ✨ CROSSHAIR LOGIC: Check if this cell is in the same row, col, or 3x3 box as the selected cell
       if (
-        rowIndex === selectedCell.row ||
-        colIndex === selectedCell.col ||
+        rowIndex === selectedCell.row || colIndex === selectedCell.col ||
         (Math.floor(rowIndex / 3) === Math.floor(selectedCell.row / 3) && Math.floor(colIndex / 3) === Math.floor(selectedCell.col / 3))
       ) {
         isRelated = true;
       }
-
-      // ✨ MATCHING NUMBER LOGIC: Check if this cell holds the exact same number as the clicked cell
       const selectedValue = grid[selectedCell.row][selectedCell.col].value;
       if (selectedValue !== 0 && cell.value === selectedValue) {
         isSameNumber = true;
       }
     }
 
-    // Creates the thick 3x3 grid borders classic to Sudoku
     const borderStyle = {
       borderTopWidth: rowIndex % 3 === 0 ? 2 : 0.5,
       borderLeftWidth: colIndex % 3 === 0 ? 2 : 0.5,
@@ -200,13 +228,14 @@ export default function GameScreen() {
       borderBottomWidth: rowIndex === 8 ? 2 : 0,
     };
 
-    // ✨ COLOR HIERARCHY: Applies the highest-priority color state
+    // ✨ COLOR HIERARCHY: Added the gold hint highlight!
     let cellBg = 'transparent';
-    if (isSelected) cellBg = colors.selected; // 1. The exact clicked cell
-    else if (isIncorrect && !cell.readOnly) cellBg = '#ffcccc'; // 2. Wrong inputs (Red)
-    else if (isSameNumber) cellBg = colors.highlight; // 3. Identical numbers glow
-    else if (isRelated) cellBg = colors.restricted; // 4. The Crosshair path
-    else if (cell.readOnly) cellBg = colors.fixedBackground || 'rgba(150,150,150,0.2)'; // 5. Default fixed cells
+    if (isSuggestedHint) cellBg = 'rgba(255, 215, 0, 0.4)'; // Gold/Yellow for Step-1 Hint
+    else if (isSelected) cellBg = colors.selected; 
+    else if (isIncorrect && !cell.readOnly) cellBg = '#ffcccc'; 
+    else if (isSameNumber) cellBg = colors.highlight; 
+    else if (isRelated) cellBg = colors.restricted; 
+    else if (cell.readOnly) cellBg = colors.fixedBackground || 'rgba(150,150,150,0.2)'; 
 
     return (
       <TouchableOpacity
@@ -247,22 +276,30 @@ export default function GameScreen() {
       </View>
 
       <View style={styles.controls}>
-        <TouchableOpacity onPress={handleHint}>
-          <Text style={styles.noteToggle}>🧠 Hint</Text>
+        {/* ✨ DYNAMIC HINT BUTTON */}
+        <TouchableOpacity 
+          onPress={handleHint} 
+          style={[styles.controlBtn, hintCooldown > 0 && { opacity: 0.5 }]}
+          disabled={hintCooldown > 0}
+        >
+          <Text style={[styles.noteToggle, suggestedHint && { color: '#b8860b' }]}>
+            {hintCooldown > 0 ? `⏳ ${hintCooldown}s` : (suggestedHint ? `🔍 Çöz` : `🧠 İpucu (${hintTokens})`)}
+          </Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.controlBtn}>
           <Text style={styles.noteToggle}>🔄 Reset</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => navigation.navigate('Home')}>
-          <Text style={styles.noteToggle}>🏠 Ana Sayfa</Text>
+        <TouchableOpacity onPress={() => navigation.navigate('Home')} style={styles.controlBtn}>
+          <Text style={styles.noteToggle}>🏠 Çık</Text>
         </TouchableOpacity>
       </View>
 
-      {/* INPUT BUTTONS */}
+      {/* ✨ THE PROFESSIONAL NUMBER ROW STYLING ✨ */}
       <View style={styles.inputRow}>
         {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => {
           const used = numberUsage[num] || 0;
-          const disabled = used >= 9; // Disables the button visually if 9 are correctly placed
+          const disabled = used >= 9;
           return (
             <TouchableOpacity
               key={num}
@@ -288,26 +325,10 @@ const getStyles = (colors: any) => StyleSheet.create({
   cell: { flex: 1, justifyContent: 'center', alignItems: 'center', borderColor: colors.text },
   cellText: { fontSize: 20 },
   controls: { flexDirection: 'row', justifyContent: 'space-around', width: '100%', maxWidth: 400, marginVertical: 20 },
+  controlBtn: { padding: 8, alignItems: 'center' },
   noteToggle: { fontSize: 16, fontWeight: 'bold', color: colors.text },
   
-  // ✨ THE PROFESSIONAL NUMBER ROW STYLING ✨
-  inputRow: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    width: '100%', 
-    maxWidth: 400,
-    marginTop: 10,
-    // By NOT having flexWrap: 'wrap' here, it forces them to stay on one line
-  },
-  numButton: { 
-    flex: 1, // ✨ NEW: "flex: 1" tells all 9 buttons to share the available horizontal space equally.
-    marginHorizontal: 3, // Tiny gap so they don't physically touch each other.
-    aspectRatio: 0.8, // ✨ NEW: Forces the height to be slightly larger than the width, creating a tall rectangle rather than a squished box.
-    borderRadius: 8, 
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 2, 
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 1,
-  },
+  inputRow: { flexDirection: 'row', justifyContent: 'space-between', width: '100%', maxWidth: 400, marginTop: 10 },
+  numButton: { flex: 1, marginHorizontal: 3, aspectRatio: 0.8, borderRadius: 8, justifyContent: 'center', alignItems: 'center', elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 1 },
   numButtonText: { fontSize: 22, fontWeight: 'bold', color: colors.text },
 });

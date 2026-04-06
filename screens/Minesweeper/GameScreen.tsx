@@ -5,6 +5,8 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { generateBoard } from '../../services/logic';
 import { RootStackParamList } from '../../utils/types';
+// 🚨 IMPORT UPDATED HINT FUNCTIONS
+import { useHint, getMinesweeperHint, getStats } from '../../services/hintManager';
 import { useTheme } from '../../context/ThemeContext';
 
 type GameRoute = RouteProp<RootStackParamList, 'MinesweeperGame'>;
@@ -28,16 +30,31 @@ export default function MinesweeperGameScreen() {
 
   // ✨ NEW: Dynamic Zoom State (Defaults to 1x scale)
   const [zoom, setZoom] = useState(1);
+  const zoomIn = () => setZoom(prev => Math.min(prev + 0.2, 2.0));
+  const zoomOut = () => setZoom(prev => Math.max(prev - 0.2, 0.4));
 
-  // ✨ NEW: Zoom Functions with limits so it doesn't get infinitely big or small
-  const zoomIn = () => setZoom(prev => Math.min(prev + 0.2, 2.0));   // Max 2x zoom
-  const zoomOut = () => setZoom(prev => Math.max(prev - 0.2, 0.4));  // Min 0.4x zoom
+  // ✨ NEW: Hint Tracking State
+  const [hintCooldown, setHintCooldown] = useState(0);
+  const [hintTokens, setHintTokens] = useState(0);
 
+  // ✨ TIMER & COOLDOWN
   useEffect(() => {
     const timer = setInterval(() => {
-      if (!isFinishedRef.current) setTime((t) => t + 1);
+      if (!isFinishedRef.current) {
+        setTime((t) => t + 1);
+        setHintCooldown((c) => (c > 0 ? c - 1 : 0)); // Countdown lock
+      }
     }, 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  // ✨ FETCH TOKENS ON LOAD
+  useEffect(() => {
+    const fetchStats = async () => {
+      const stats = await getStats();
+      setHintTokens(stats.hints);
+    };
+    fetchStats();
   }, []);
 
   const handleEndGame = async (status: 'won' | 'lost') => {
@@ -105,6 +122,27 @@ export default function MinesweeperGameScreen() {
     setFlags(newFlags);
   };
 
+  // ✨ NEW: MINESWEEPER HINT CONTROLLER
+  const handleHint = async () => {
+    if (hintCooldown > 0 || gameOver) return;
+
+    const hasToken = await useHint();
+    if (!hasToken) {
+      alert("İpucu kalmadı! Yıldız kazanarak yeni ipuçları alabilirsiniz.");
+      return;
+    }
+
+    const hint = getMinesweeperHint(board, revealed, flags, rows, cols);
+    if (hint) {
+      // Magically click a safe cell for the player
+      revealCell(hint.row, hint.col);
+      
+      // Update UI and apply 60s cooldown
+      setHintTokens(prev => prev - 1);
+      setHintCooldown(60);
+    }
+  };
+
   const currentFlags = flags.flat().filter(f => f).length;
 
   return (
@@ -118,8 +156,19 @@ export default function MinesweeperGameScreen() {
             <Text style={{ fontSize: 18, color: colors.text }}>🔍-</Text>
           </TouchableOpacity>
           
+          {/* ✨ DYNAMIC HINT BUTTON */}
+          <TouchableOpacity 
+            onPress={handleHint} 
+            disabled={hintCooldown > 0}
+            style={[styles.hintButton, hintCooldown > 0 && { opacity: 0.5, borderColor: 'transparent' }]}
+          >
+            <Text style={{ fontSize: 16, fontWeight: 'bold', color: colors.text }}>
+              {hintCooldown > 0 ? `⏳ ${hintCooldown}s` : `🧠 İpucu (${hintTokens})`}
+            </Text>
+          </TouchableOpacity>
+
           <TouchableOpacity onPress={() => navigation.navigate('Home')}>
-            <Text style={styles.exitText}>🏠 Vazgeç</Text>
+            <Text style={styles.exitText}>🏠 Çık</Text>
           </TouchableOpacity>
 
           <TouchableOpacity onPress={zoomIn} style={[styles.zoomButton, { backgroundColor: colors.selected }]}>
@@ -130,9 +179,7 @@ export default function MinesweeperGameScreen() {
       </View>
 
       {/* ✨ NEW: 2D ScrollView Architecture */}
-      {/* Outer ScrollView handles Up/Down panning */}
       <ScrollView style={styles.scrollVertical} contentContainerStyle={styles.scrollContent}>
-        {/* Inner ScrollView handles Left/Right panning */}
         <ScrollView horizontal style={styles.scrollHorizontal} contentContainerStyle={styles.scrollContent}>
           
           <View style={[styles.boardContainer, { padding: 6 * zoom, borderRadius: 8 * zoom }]}>
@@ -141,7 +188,7 @@ export default function MinesweeperGameScreen() {
                 {row.map((cell, c) => (
                   <View
                     key={`cell-wrapper-${r}-${c}`}
-                    // @ts-expect-error - React Native Web specific prop
+                    // @ts-expect-error
                     onContextMenu={(e: any) => {
                       if (Platform.OS === 'web') {
                         e.preventDefault();
@@ -152,12 +199,12 @@ export default function MinesweeperGameScreen() {
                     <TouchableOpacity
                       style={[
                         styles.cell, 
-                        // ✨ NEW: Dynamically multiply width, height, and margins by the zoom state
+                        // ✨ NEW: Dynamically multiply dimensions by zoom state
                         { 
                           width: 36 * zoom, 
                           height: 36 * zoom, 
                           margin: 1 * zoom,
-                          borderWidth: 1 * Math.max(0.5, zoom) // Ensure borders don't vanish when zoomed out
+                          borderWidth: 1 * Math.max(0.5, zoom) 
                         },
                         revealed[r][c] ? { backgroundColor: colors.background } : { backgroundColor: 'rgba(255,255,255,0.4)' }
                       ]}
@@ -166,7 +213,7 @@ export default function MinesweeperGameScreen() {
                       delayLongPress={200}
                       activeOpacity={0.7}
                     >
-                      {/* ✨ NEW: Dynamically resize the text inside the cell */}
+                      {/* ✨ NEW: Resize text inside the cell */}
                       <Text style={[styles.cellText, { color: getCellColor(cell), fontSize: 20 * zoom }]}>
                         {flags[r][c] ? '🚩' : (revealed[r][c] ? (cell === 0 ? '' : cell) : '')}
                       </Text>
@@ -193,12 +240,11 @@ const getStyles = (colors: any) => StyleSheet.create({
   header: { padding: 20, alignItems: 'center', backgroundColor: colors.fixedBackground, elevation: 4, zIndex: 10 },
   headerText: { fontSize: 22, fontWeight: '800', color: colors.text, marginBottom: 15 },
   
-  // New Header Control Styles
-  controlRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', maxWidth: 300 },
+  controlRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', maxWidth: 350 },
   zoomButton: { paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8 },
+  hintButton: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 20, borderWidth: 2, borderColor: colors.text },
   exitText: { color: '#e74c3c', fontSize: 18, fontWeight: 'bold' },
   
-  // New ScrollView Styles
   scrollVertical: { flex: 1, width: '100%' },
   scrollHorizontal: { flex: 1 },
   scrollContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
