@@ -1,12 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
-// ✨ Added ScrollView to our imports
 import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, Platform, ScrollView } from 'react-native';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { generateBoard } from '../../services/logic';
 import { RootStackParamList } from '../../utils/types';
-// 🚨 IMPORT UPDATED HINT FUNCTIONS
-import { useHint, getMinesweeperHint, getStats } from '../../services/hintManager';
+import { getMinesweeperHint } from '../../services/hintManager';
 import { useTheme } from '../../context/ThemeContext';
 
 type GameRoute = RouteProp<RootStackParamList, 'MinesweeperGame'>;
@@ -28,14 +26,14 @@ export default function MinesweeperGameScreen() {
   const [lives, setLives] = useState(3);
   const isFinishedRef = useRef(false);
 
-  // ✨ NEW: Dynamic Zoom State (Defaults to 1x scale)
   const [zoom, setZoom] = useState(1);
   const zoomIn = () => setZoom(prev => Math.min(prev + 0.2, 2.0));
   const zoomOut = () => setZoom(prev => Math.max(prev - 0.2, 0.4));
 
-  // ✨ NEW: Hint Tracking State
+  // ✨ Hint Tracking States
   const [hintCooldown, setHintCooldown] = useState(0);
-  const [hintTokens, setHintTokens] = useState(0);
+  // ✨ UNLIMITED TRACKER: Starts at 0 every time you play
+  const [hintsUsedThisGame, setHintsUsedThisGame] = useState(0); 
 
   // ✨ TIMER & COOLDOWN
   useEffect(() => {
@@ -46,15 +44,6 @@ export default function MinesweeperGameScreen() {
       }
     }, 1000);
     return () => clearInterval(timer);
-  }, []);
-
-  // ✨ FETCH TOKENS ON LOAD
-  useEffect(() => {
-    const fetchStats = async () => {
-      const stats = await getStats();
-      setHintTokens(stats.hints);
-    };
-    fetchStats();
   }, []);
 
   const handleEndGame = async (status: 'won' | 'lost') => {
@@ -122,48 +111,53 @@ export default function MinesweeperGameScreen() {
     setFlags(newFlags);
   };
 
-  // ✨ NEW: MINESWEEPER HINT CONTROLLER
-  const handleHint = async () => {
+  // ✨ UNLIMITED MINESWEEPER HINT CONTROLLER
+  const handleHint = () => {
     if (hintCooldown > 0 || gameOver) return;
-
-    const hasToken = await useHint();
-    if (!hasToken) {
-      alert("İpucu kalmadı! Yıldız kazanarak yeni ipuçları alabilirsiniz.");
-      return;
-    }
 
     const hint = getMinesweeperHint(board, revealed, flags, rows, cols);
     if (hint) {
-      // Magically click a safe cell for the player
       revealCell(hint.row, hint.col);
       
-      // Update UI and apply 60s cooldown
-      setHintTokens(prev => prev - 1);
-      setHintCooldown(60);
+      // Increment the tracker. If this was the 3rd hint, lock the button for 60 seconds!
+      setHintsUsedThisGame(prev => {
+        const newTotal = prev + 1;
+        if (newTotal >= 3) {
+          setHintCooldown(60);
+        }
+        return newTotal;
+      });
     }
   };
 
   const currentFlags = flags.flat().filter(f => f).length;
+
+  // ✨ Dynamic Button Text Logic
+  let hintButtonText = '🧠 İpucu';
+  if (hintCooldown > 0) {
+    hintButtonText = `⏳ ${hintCooldown}s`;
+  } else if (hintsUsedThisGame < 3) {
+    hintButtonText = `🧠 İpucu (${3 - hintsUsedThisGame})`;
+  }
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerText}>⏱ {time}s | ❤️ {lives} | 🚩 {Math.max(0, mines - currentFlags)}</Text>
         
-        {/* ✨ NEW: Control Row for Zooming and Exiting */}
         <View style={styles.controlRow}>
           <TouchableOpacity onPress={zoomOut} style={[styles.zoomButton, { backgroundColor: colors.selected }]}>
             <Text style={{ fontSize: 18, color: colors.text }}>🔍-</Text>
           </TouchableOpacity>
           
-          {/* ✨ DYNAMIC HINT BUTTON */}
+          {/* ✨ DYNAMIC UNLIMITED HINT BUTTON */}
           <TouchableOpacity 
             onPress={handleHint} 
             disabled={hintCooldown > 0}
             style={[styles.hintButton, hintCooldown > 0 && { opacity: 0.5, borderColor: 'transparent' }]}
           >
             <Text style={{ fontSize: 16, fontWeight: 'bold', color: colors.text }}>
-              {hintCooldown > 0 ? `⏳ ${hintCooldown}s` : `🧠 İpucu (${hintTokens})`}
+              {hintButtonText}
             </Text>
           </TouchableOpacity>
 
@@ -178,7 +172,6 @@ export default function MinesweeperGameScreen() {
 
       </View>
 
-      {/* ✨ NEW: 2D ScrollView Architecture */}
       <ScrollView style={styles.scrollVertical} contentContainerStyle={styles.scrollContent}>
         <ScrollView horizontal style={styles.scrollHorizontal} contentContainerStyle={styles.scrollContent}>
           
@@ -199,7 +192,6 @@ export default function MinesweeperGameScreen() {
                     <TouchableOpacity
                       style={[
                         styles.cell, 
-                        // ✨ NEW: Dynamically multiply dimensions by zoom state
                         { 
                           width: 36 * zoom, 
                           height: 36 * zoom, 
@@ -213,7 +205,6 @@ export default function MinesweeperGameScreen() {
                       delayLongPress={200}
                       activeOpacity={0.7}
                     >
-                      {/* ✨ NEW: Resize text inside the cell */}
                       <Text style={[styles.cellText, { color: getCellColor(cell), fontSize: 20 * zoom }]}>
                         {flags[r][c] ? '🚩' : (revealed[r][c] ? (cell === 0 ? '' : cell) : '')}
                       </Text>

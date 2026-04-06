@@ -7,8 +7,8 @@ import { generateSudoku } from '../../services/sudokuGenerator';
 import { cloneGrid, isComplete } from '../../utils/helpers';
 import { saveStreak, resetStreak } from '../../services/streakManager';
 import { loadGame, saveGame, clearSavedGame } from '../../storage/storageUtils';
-// 🚨 IMPORT UPDATED HINT FUNCTIONS
-import { useHint, getSudokuHint, getStats } from '../../services/hintManager';
+// 🚨 Removed getStats and useHint since we want unlimited per-game hints!
+import { getSudokuHint } from '../../services/hintManager';
 import { useTheme } from '../../context/ThemeContext';
 
 export default function GameScreen() {
@@ -27,10 +27,12 @@ export default function GameScreen() {
   const [time, setTime] = useState(0);
   const [numberUsage, setNumberUsage] = useState<{ [key: number]: number }>({});
 
-  // ✨ NEW: Hint states for tokens, cooldowns, and the 2-step focus logic
+  // ✨ Hint states for cooldowns and the 2-step focus logic
   const [hintCooldown, setHintCooldown] = useState(0);
-  const [hintTokens, setHintTokens] = useState(0);
   const [suggestedHint, setSuggestedHint] = useState<{ row: number, col: number, value: number } | null>(null);
+  
+  // ✨ UNLIMITED TRACKER: Resets to 0 every single time this screen is opened!
+  const [hintsUsedThisGame, setHintsUsedThisGame] = useState(0);
 
   // ✨ TIMER & COOLDOWN: Simple 1-second interval counter
   useEffect(() => {
@@ -39,15 +41,6 @@ export default function GameScreen() {
       setHintCooldown((c) => (c > 0 ? c - 1 : 0)); // Countdown hint lock
     }, 1000);
     return () => clearInterval(timer);
-  }, []);
-
-  // ✨ FETCH TOKENS ON LOAD
-  useEffect(() => {
-    const fetchStats = async () => {
-      const stats = await getStats();
-      setHintTokens(stats.hints);
-    };
-    fetchStats();
   }, []);
 
   // ✨ SETUP GAME: Loads a saved game or generates a new one based on difficulty
@@ -72,7 +65,7 @@ export default function GameScreen() {
     setupGame();
   }, [isResumed, difficulty]);
 
-  // ✨ KEYBOARD LISTENER: Allows PC users to use standard numbers and Numpad
+  // ✨ KEYBOARD LISTENER
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -92,7 +85,6 @@ export default function GameScreen() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedCell, grid]); 
 
-  // ✨ SMART USAGE TRACKER: Only counts numbers that are correctly placed
   const updateNumberUsage = (currentGrid: Cell[][], currentSolution: number[][]) => {
     if (!currentSolution.length) return;
     const usage: { [key: number]: number } = {};
@@ -107,7 +99,6 @@ export default function GameScreen() {
     setNumberUsage(usage);
   };
 
-  // ✨ CORE LOGIC: Handles inputs, clearing, overwriting, and mistakes
   const handleNumberInput = (num: number) => {
     if (!selectedCell) return;
     const { row, col } = selectedCell;
@@ -115,7 +106,6 @@ export default function GameScreen() {
     if (currentCell.readOnly) return;
     const updatedGrid = cloneGrid(grid);
 
-    // ✨ TOGGLE TO CLEAR: If user presses backspace (0) OR clicks the exact same number, erase it
     if (num === 0 || currentCell.value === num) {
       updatedGrid[row][col] = { ...currentCell, value: 0 };
       setGrid(updatedGrid);
@@ -126,7 +116,6 @@ export default function GameScreen() {
 
     updatedGrid[row][col] = { value: num, readOnly: false, notes: [] };
 
-    // ✨ MISTAKE CHECK
     if (num !== solution[row][col]) {
       setMistakes((m) => {
         const newMistakes = m + 1;
@@ -137,10 +126,15 @@ export default function GameScreen() {
         return newMistakes;
       });
     } else {
-      // If they typed the correct number into the suggested hint cell manually, clear the hint!
+      // If they typed the correct number manually into the suggested hint cell...
       if (suggestedHint && suggestedHint.row === row && suggestedHint.col === col) {
         setSuggestedHint(null);
-        setHintCooldown(60); // Start cooldown since the hint is resolved
+        setHintsUsedThisGame(prev => {
+          const newTotal = prev + 1;
+          // Apply cooldown if they just used their 3rd free hint
+          if (newTotal >= 3) setHintCooldown(60); 
+          return newTotal;
+        });
       }
     }
 
@@ -155,11 +149,11 @@ export default function GameScreen() {
     }
   };
 
-  // ✨ NEW: 2-STEP HINT SYSTEM
-  const handleHint = async () => {
+  // ✨ UNLIMITED 2-STEP HINT SYSTEM
+  const handleHint = () => {
     if (hintCooldown > 0) return;
 
-    // STEP 2: If a hint is already highlighted, fill it in!
+    // STEP 2: Fill in the highlighted hint
     if (suggestedHint) {
       const updatedGrid = cloneGrid(grid);
       updatedGrid[suggestedHint.row][suggestedHint.col].value = suggestedHint.value;
@@ -169,8 +163,16 @@ export default function GameScreen() {
       updateNumberUsage(updatedGrid, solution);
       saveGame({ grid: updatedGrid, solution, mistakes, time });
       
-      setSuggestedHint(null); // Clear the active hint
-      setHintCooldown(60);    // Start the 60-second cooldown
+      setSuggestedHint(null);
+      
+      // Increment session counter. If it reaches 3, the NEXT hint will make them wait 60s.
+      setHintsUsedThisGame(prev => {
+        const newTotal = prev + 1;
+        if (newTotal >= 3) {
+          setHintCooldown(60);    
+        }
+        return newTotal;
+      });
       
       if (isComplete(updatedGrid, solution)) {
         clearSavedGame();
@@ -180,29 +182,19 @@ export default function GameScreen() {
       return;
     }
 
-    // STEP 1: Check tokens and highlight a cell to focus on
-    const hasToken = await useHint();
-    if (!hasToken) {
-      alert("İpucu kalmadı! Yıldız kazanarak yeni ipuçları alabilirsiniz.");
-      return;
-    }
-
+    // STEP 1: Highlight the cell
     const hint = getSudokuHint(grid, solution);
     if (hint) {
-      setHintTokens(prev => prev - 1); // Deduct token
-      setSuggestedHint(hint);          // Save it in state
-      setSelectedCell({ row: hint.row, col: hint.col }); // Move cursor to it automatically
-      // Notice we DO NOT start the cooldown yet! They must click again to reveal.
+      setSuggestedHint(hint);
+      setSelectedCell({ row: hint.row, col: hint.col });
     } else {
       alert("Tüm hücreler dolu!");
     }
   };
 
-  // ✨ CELL RENDERER: Calculates borders and dynamic highlight colors
   const renderCell = (cell: Cell, rowIndex: number, colIndex: number) => {
     const isSelected = selectedCell?.row === rowIndex && selectedCell?.col === colIndex;
     const isIncorrect = cell.value !== 0 && cell.value !== solution[rowIndex][colIndex];
-    // Check if this specific cell is the active hint focus target
     const isSuggestedHint = suggestedHint?.row === rowIndex && suggestedHint?.col === colIndex;
     
     let isRelated = false;
@@ -228,9 +220,8 @@ export default function GameScreen() {
       borderBottomWidth: rowIndex === 8 ? 2 : 0,
     };
 
-    // ✨ COLOR HIERARCHY: Added the gold hint highlight!
     let cellBg = 'transparent';
-    if (isSuggestedHint) cellBg = 'rgba(255, 215, 0, 0.4)'; // Gold/Yellow for Step-1 Hint
+    if (isSuggestedHint) cellBg = 'rgba(255, 215, 0, 0.4)';
     else if (isSelected) cellBg = colors.selected; 
     else if (isIncorrect && !cell.readOnly) cellBg = '#ffcccc'; 
     else if (isSameNumber) cellBg = colors.highlight; 
@@ -255,6 +246,16 @@ export default function GameScreen() {
     );
   };
 
+  // ✨ Dynamic Button Text Logic
+  let hintButtonText = '🧠 İpucu';
+  if (hintCooldown > 0) {
+    hintButtonText = `⏳ ${hintCooldown}s`;
+  } else if (suggestedHint) {
+    hintButtonText = `🔍 Çöz`;
+  } else if (hintsUsedThisGame < 3) {
+    hintButtonText = `🧠 İpucu (${3 - hintsUsedThisGame})`;
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <View style={styles.infoBar}>
@@ -276,14 +277,14 @@ export default function GameScreen() {
       </View>
 
       <View style={styles.controls}>
-        {/* ✨ DYNAMIC HINT BUTTON */}
+        {/* ✨ UNLIMITED HINT BUTTON */}
         <TouchableOpacity 
           onPress={handleHint} 
           style={[styles.controlBtn, hintCooldown > 0 && { opacity: 0.5 }]}
           disabled={hintCooldown > 0}
         >
           <Text style={[styles.noteToggle, suggestedHint && { color: '#b8860b' }]}>
-            {hintCooldown > 0 ? `⏳ ${hintCooldown}s` : (suggestedHint ? `🔍 Çöz` : `🧠 İpucu (${hintTokens})`)}
+            {hintButtonText}
           </Text>
         </TouchableOpacity>
 
@@ -295,7 +296,6 @@ export default function GameScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* ✨ THE PROFESSIONAL NUMBER ROW STYLING ✨ */}
       <View style={styles.inputRow}>
         {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => {
           const used = numberUsage[num] || 0;
